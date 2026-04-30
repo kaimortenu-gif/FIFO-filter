@@ -411,7 +411,13 @@ if opplastet:
             st.dataframe(opps, use_container_width=True)
 
         st.markdown('<div class="section-label">Last ned</div>', unsafe_allow_html=True)
-        filnavn_ut = opplastet.name.replace(".xlsx", "_FIFO.xlsx").replace(".xls", "_FIFO.xlsx")
+        navn = opplastet.name
+        if navn.endswith(".xlsx"):
+            filnavn_ut = navn[:-5] + "_FIFO.xlsx"
+        elif navn.endswith(".xls"):
+            filnavn_ut = navn[:-4] + "_FIFO.xlsx"
+        else:
+            filnavn_ut = navn + "_FIFO.xlsx"
         st.download_button(
             label="⬇  Last ned i ODIN-importformat",
             data=df_til_excel_bytes(resultat),
