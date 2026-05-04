@@ -69,7 +69,10 @@ ANDELER_KANDIDATER  = ["quantity", "antall", "andeler", "units", "shares"]
 BELOP_KANDIDATER    = ["amount", "beloep", "beløp", "verdi"]
 TYPE_KANDIDATER     = ["tran\ncode", "tran code", "trancode", "type", "transtype",
                        "transaction type", "transaksjonstype"]
-SECURITY_KANDIDATER = ["security", "fund class name", "fond", "name", "fondsnavn"]
+SECURITY_KANDIDATER      = ["security", "fund class name", "fond", "name", "fondsnavn"]
+ORIGINAL_COST_KANDIDATER = ["original cost", "original cost", "originalcost", "cost", "original_cost"]
+TRANSFER_KJOP_TYPER      = {"ti", "li"}  # Disse bruker Original Cost hvis tilgjengelig
+AVSLUTTENDE_SALG_TYPER   = {"to", "lo"}  # Disse fjernes fra filtrering hvis de er siste transaksjon per ISIN
 
 KJOP_VERDIER_AUTO = {"by", "kjøp", "kjop", "buy", "purchase", "ac", "ti", "li"}
 SALG_VERDIER_AUTO = {"sl", "salg", "sell", "sale", "to", "lo"}
@@ -131,6 +134,7 @@ def autodetekter(df):
         ("isin", ISIN_KANDIDATER), ("dato", DATO_KANDIDATER),
         ("andeler", ANDELER_KANDIDATER), ("belop", BELOP_KANDIDATER),
         ("security", SECURITY_KANDIDATER),
+        ("original_cost", ORIGINAL_COST_KANDIDATER),
     ]:
         kol[navn] = finn_kolonne_paa_navn(df, kandidater)
     kol["type"] = finn_type_kolonne(df)
@@ -146,6 +150,71 @@ def klassifiser_verdier(df, type_kol, kjop_override=None, salg_override=None):
     ignor_set = {v for v in unike if v in IGNORER_VERDIER}
     ukjente   = {v for v in unike if v not in kjop_set | salg_set | ignor_set}
     return kjop_set, salg_set, ukjente
+
+def skill_ut_avsluttende_utforinger(df, kol):
+    """
+    Finner ISIN-er der to/lo er den siste daterte transaksjonen og
+    fjerner alle to/lo-rader for disse ISIN-ene fra filtreringen.
+    Returnerer (df_uten_utforinger, liste_av_utforings_info).
+    """
+    if not kol.get("type") or not kol.get("isin") or not kol.get("dato"):
+        return df, []
+
+    df = df.copy()
+    df["_dato_tmp"] = pd.to_datetime(df[kol["dato"]], dayfirst=True, errors="coerce")
+
+    utforte = []
+    indekser_som_skal_fjernes = []
+
+    for isin, grp in df.groupby(kol["isin"]):
+        grp_med_dato = grp.dropna(subset=["_dato_tmp"]).sort_values("_dato_tmp")
+        if len(grp_med_dato) == 0:
+            continue
+        siste_type = str(grp_med_dato.iloc[-1][kol["type"]]).strip().lower()
+        if siste_type not in AVSLUTTENDE_SALG_TYPER:
+            continue
+
+        # Sjekk at alle to/lo kommer etter alle kjøp → avsluttende utføring
+        to_lo_rader = grp_med_dato[grp_med_dato[kol["type"]].str.strip().str.lower().isin(AVSLUTTENDE_SALG_TYPER)]
+        kjop_rader  = grp_med_dato[grp_med_dato[kol["type"]].str.strip().str.lower().isin(KJOP_VERDIER_AUTO)]
+
+        if len(kjop_rader) == 0:
+            continue
+
+        siste_kjop_dato  = kjop_rader["_dato_tmp"].max()
+        første_tolo_dato = to_lo_rader["_dato_tmp"].min()
+
+        if første_tolo_dato < siste_kjop_dato:
+            # to/lo er blandet inn i kjøpsrekken – ikke en ren avsluttende utføring
+            continue
+
+        # Beregn total andeler og beløp for to/lo-radene
+        def summer_kolonne(rader, kol_navn):
+            total = 0
+            for v in rader[kol_navn]:
+                try:
+                    total += float(str(v).replace(",", ".").strip())
+                except Exception:
+                    pass
+            return total
+
+        security_navn = ""
+        if kol.get("security") and kol["security"] in grp.columns:
+            security_navn = str(grp_med_dato.iloc[-1].get(kol["security"], ""))
+
+        utforte.append({
+            "isin":        isin,
+            "security":    security_navn,
+            "type":        siste_type.upper(),
+            "antall_rader": len(to_lo_rader),
+            "sum_andeler": summer_kolonne(to_lo_rader, kol["andeler"]),
+            "siste_dato":  grp_med_dato.iloc[-1]["_dato_tmp"].strftime("%d.%m.%Y"),
+        })
+        indekser_som_skal_fjernes.extend(to_lo_rader.index.tolist())
+
+    df_renset = df.drop(index=indekser_som_skal_fjernes).drop(columns=["_dato_tmp"])
+    return df_renset, utforte
+
 
 def les_fil(fil):
     df_rå = pd.read_excel(fil, header=None, dtype=str, nrows=30)
@@ -173,6 +242,9 @@ def kjor_fifo(df, kol, kjop_set, salg_set):
 
     df["_andeler"] = df[kol["andeler"]].apply(til_decimal)
     df["_belop"]   = df[kol["belop"]].apply(til_decimal)
+
+    # Fjern avsluttende to/lo-utføringer før FIFO-filtrering
+    df, utforte = skill_ut_avsluttende_utforinger(df, kol)
 
     ingen_type = kol["type"] is None
     if not ingen_type:
@@ -217,10 +289,18 @@ def kjor_fifo(df, kol, kjop_set, salg_set):
                 faktor = igjen / opp["orig_andeler"]
                 orig[kol["andeler"]] = str(igjen.quantize(Decimal("0.0000001"), rounding=ROUND_HALF_UP))
                 orig[kol["belop"]]   = str((opp["orig_belop"] * faktor).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+            # Bruk Original Cost for ti/li hvis tilgjengelig og ikke tom
+            if kol.get("original_cost") and kol.get("type"):
+                trans_type = str(orig.get(kol["type"], "")).strip().lower()
+                if trans_type in TRANSFER_KJOP_TYPER:
+                    orig_cost_val = orig.get(kol["original_cost"], "")
+                    f = til_float(orig_cost_val)
+                    if f is not None and f != 0:
+                        orig[kol["belop"]] = str(Decimal(str(f)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
             resultat_rader.append(orig)
 
     if not resultat_rader:
-        return pd.DataFrame(columns=OUTPUT_KOLONNER), advarsler
+        return pd.DataFrame(columns=OUTPUT_KOLONNER), advarsler, utforte
 
     df_filtr = pd.DataFrame(resultat_rader).reset_index(drop=True)
     today = date.today().strftime("%d.%m.%Y")
@@ -235,7 +315,7 @@ def kjor_fifo(df, kol, kjop_set, salg_set):
     for k in OUTPUT_KOLONNER:
         if k in ut.columns and ut[k].isna().all():
             ut[k] = ""
-    return ut[OUTPUT_KOLONNER], advarsler
+    return ut[OUTPUT_KOLONNER], advarsler, utforte
 
 
 def df_til_excel_bytes(df):
@@ -335,12 +415,13 @@ if opplastet:
             kol_type = kol_type_valg if kol_type_valg != "(ingen)" else None
 
     kol_valgt = {
-        "isin":     kol_isin,
-        "dato":     kol_dato,
-        "andeler":  kol_andeler,
-        "belop":    kol_belop,
-        "type":     kol_type,
-        "security": kol_security if kol_security != "(ingen)" else None,
+        "isin":          kol_isin,
+        "dato":          kol_dato,
+        "andeler":       kol_andeler,
+        "belop":         kol_belop,
+        "type":          kol_type,
+        "security":      kol_security if kol_security != "(ingen)" else None,
+        "original_cost": kol_auto.get("original_cost"),
     }
 
     kjop_set = salg_set = set()
@@ -378,9 +459,10 @@ if opplastet:
     if st.button("▶  Kjør FIFO-filter"):
         with st.spinner("Prosesserer…"):
             try:
-                resultat, advarsler = kjor_fifo(df_original, kol_valgt, kjop_set, salg_set)
+                resultat, advarsler, utforte = kjor_fifo(df_original, kol_valgt, kjop_set, salg_set)
                 st.session_state["resultat"]  = resultat
                 st.session_state["advarsler"] = advarsler
+                st.session_state["utforte"]   = utforte
                 st.session_state["n_inn"]     = len(df_original)
             except Exception as e:
                 st.error(f"Feil under prosessering: {e}")
@@ -388,6 +470,7 @@ if opplastet:
     if "resultat" in st.session_state:
         resultat  = st.session_state["resultat"]
         advarsler = st.session_state["advarsler"]
+        utforte   = st.session_state.get("utforte", [])
         n_inn     = st.session_state["n_inn"]
         n_ut      = len(resultat)
 
@@ -405,6 +488,24 @@ if opplastet:
             st.markdown(f'<div class="warn-box">⚠ {a}</div>', unsafe_allow_html=True)
 
         st.dataframe(resultat, use_container_width=True, height=350)
+
+        if utforte:
+            st.markdown(
+                '<div class="warn-box">⚠ <b>Avsluttende utføringer fjernet fra filtrering</b><br>'
+                'Følgende ISIN-er hadde to/lo-transaksjoner som avslutter hele beholdningen. '
+                'Disse er fjernet fra FIFO-filtreringen, og beholdningen før utføringen beholdes i output.</div>',
+                unsafe_allow_html=True
+            )
+            utforte_df = pd.DataFrame(utforte).rename(columns={
+                "isin":         "Fund Class ISIN",
+                "security":     "Verdipapir",
+                "type":         "Type",
+                "antall_rader": "Antall rader fjernet",
+                "sum_andeler":  "Sum andeler ført ut",
+                "siste_dato":   "Dato siste utføring",
+            })
+            utforte_df["Sum andeler ført ut"] = utforte_df["Sum andeler ført ut"].round(7)
+            st.dataframe(utforte_df, use_container_width=True, hide_index=True)
 
         with st.expander("Oppsummering per ISIN"):
             opps = (

@@ -33,7 +33,10 @@ ANDELER_KANDIDATER  = ["quantity", "antall", "andeler", "units", "shares"]
 BELOP_KANDIDATER    = ["amount", "beloep", "beløp", "verdi"]
 TYPE_KANDIDATER     = ["tran\ncode", "tran code", "trancode", "type", "transtype",
                        "transaction type", "transaksjonstype"]
-SECURITY_KANDIDATER = ["security", "fund class name", "fond", "name", "fondsnavn"]
+SECURITY_KANDIDATER      = ["security", "fund class name", "fond", "name", "fondsnavn"]
+ORIGINAL_COST_KANDIDATER = ["original cost", "original cost", "originalcost", "cost", "original_cost"]
+TRANSFER_KJOP_TYPER      = {"ti", "li"}  # Disse bruker Original Cost hvis tilgjengelig
+AVSLUTTENDE_SALG_TYPER   = {"to", "lo"}  # Fjernes fra filtrering hvis de er siste transaksjon per ISIN
 
 KJOP_VERDIER_AUTO = {"by", "kjøp", "kjop", "buy", "purchase", "ac", "ti", "li"}
 SALG_VERDIER_AUTO = {"sl", "salg", "sell", "sale", "to", "lo"}
@@ -110,7 +113,8 @@ def autodetekter_kolonner(df):
         ("dato",     DATO_KANDIDATER,     True),
         ("andeler",  ANDELER_KANDIDATER,  True),
         ("belop",    BELOP_KANDIDATER,    True),
-        ("security", SECURITY_KANDIDATER, False),
+        ("security",      SECURITY_KANDIDATER,      False),
+        ("original_cost", ORIGINAL_COST_KANDIDATER, False),
     ]:
         funnet = finn_kolonne_paa_navn(df, kandidater)
         if funnet:
@@ -187,6 +191,68 @@ def forbered_data(df, kol, kjop_set, salg_set, ingen_type):
     return df
 
 
+def skill_ut_avsluttende_utforinger(df, kol):
+    """
+    Finner ISIN-er der to/lo er den siste daterte transaksjonen og
+    fjerner alle to/lo-rader for disse ISIN-ene fra filtreringen.
+    Returnerer (df_uten_utforinger, liste_av_utforings_info).
+    """
+    if not kol.get("type") or not kol.get("isin") or not kol.get("dato"):
+        return df, []
+
+    df = df.copy()
+    df["_dato_tmp"] = pd.to_datetime(df[kol["dato"]], dayfirst=True, errors="coerce")
+
+    utforte = []
+    indekser_som_skal_fjernes = []
+
+    for isin, grp in df.groupby(kol["isin"]):
+        grp_med_dato = grp.dropna(subset=["_dato_tmp"]).sort_values("_dato_tmp")
+        if len(grp_med_dato) == 0:
+            continue
+        siste_type = str(grp_med_dato.iloc[-1][kol["type"]]).strip().lower()
+        if siste_type not in AVSLUTTENDE_SALG_TYPER:
+            continue
+
+        to_lo_rader = grp_med_dato[grp_med_dato[kol["type"]].str.strip().str.lower().isin(AVSLUTTENDE_SALG_TYPER)]
+        kjop_rader  = grp_med_dato[grp_med_dato[kol["type"]].str.strip().str.lower().isin(KJOP_VERDIER_AUTO)]
+
+        if len(kjop_rader) == 0:
+            continue
+
+        siste_kjop_dato  = kjop_rader["_dato_tmp"].max()
+        første_tolo_dato = to_lo_rader["_dato_tmp"].min()
+
+        if første_tolo_dato < siste_kjop_dato:
+            continue
+
+        def summer(rader, k):
+            total = 0
+            for v in rader[k]:
+                try:
+                    total += float(str(v).replace(",", ".").strip())
+                except Exception:
+                    pass
+            return total
+
+        security_navn = ""
+        if kol.get("security") and kol["security"] in grp.columns:
+            security_navn = str(grp_med_dato.iloc[-1].get(kol["security"], ""))
+
+        utforte.append({
+            "isin":         isin,
+            "security":     security_navn,
+            "type":         siste_type.upper(),
+            "antall_rader": len(to_lo_rader),
+            "sum_andeler":  summer(to_lo_rader, kol["andeler"]),
+            "siste_dato":   grp_med_dato.iloc[-1]["_dato_tmp"].strftime("%d.%m.%Y"),
+        })
+        indekser_som_skal_fjernes.extend(to_lo_rader.index.tolist())
+
+    df_renset = df.drop(index=indekser_som_skal_fjernes).drop(columns=["_dato_tmp"])
+    return df_renset, utforte
+
+
 def fifo_filter(df, kol):
     df = df.sort_values([kol["isin"], kol["dato"]]).reset_index(drop=True)
     resultat_rader = []
@@ -217,6 +283,14 @@ def fifo_filter(df, kol):
                 faktor = igjen / opp["orig_andeler"]
                 orig[kol["andeler"]] = str(igjen.quantize(Decimal("0.0000001"), rounding=ROUND_HALF_UP))
                 orig[kol["belop"]]   = str((opp["orig_belop"] * faktor).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+            # Bruk Original Cost for ti/li hvis tilgjengelig og ikke tom
+            if kol.get("original_cost") and kol.get("type"):
+                trans_type = str(orig.get(kol["type"], "")).strip().lower()
+                if trans_type in TRANSFER_KJOP_TYPER:
+                    orig_cost_val = orig.get(kol["original_cost"], "")
+                    f = til_float(orig_cost_val)
+                    if f is not None and f != 0:
+                        orig[kol["belop"]] = str(Decimal(str(f)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
             resultat_rader.append(orig)
 
     if not resultat_rader:
@@ -317,12 +391,13 @@ def main():
         v is None for v in [args.isin, args.dato, args.andeler, args.belop]) else {}
 
     kol = {
-        "isin":     args.isin    or auto.get("isin"),
-        "dato":     args.dato    or auto.get("dato"),
-        "andeler":  args.andeler or auto.get("andeler"),
-        "belop":    args.belop   or auto.get("belop"),
-        "type":     args.type    or auto.get("type"),
-        "security": auto.get("security"),
+        "isin":          args.isin    or auto.get("isin"),
+        "dato":          args.dato    or auto.get("dato"),
+        "andeler":       args.andeler or auto.get("andeler"),
+        "belop":         args.belop   or auto.get("belop"),
+        "type":          args.type    or auto.get("type"),
+        "security":      auto.get("security"),
+        "original_cost": auto.get("original_cost"),
     }
 
     kjop_set = salg_set = None
@@ -332,6 +407,12 @@ def main():
         args.ingen_type = True
 
     print()
+    df, utforte = skill_ut_avsluttende_utforinger(df, kol)
+    if utforte:
+        print("\n── Avsluttende utføringer fjernet (beholdes i output) ──")
+        for u in utforte:
+            print(f"  {u['isin']} ({u['security']}): {u['antall_rader']} {u['type']}-rad(er), "
+                  f"{u['sum_andeler']:.4f} andeler ført ut {u['siste_dato']}")
     df_klar   = forbered_data(df, kol, kjop_set, salg_set, args.ingen_type)
     df_filtr  = fifo_filter(df_klar, kol)
     df_output = bygg_output_df(df_filtr, kol)
