@@ -379,7 +379,7 @@ def df_til_excel_bytes(df):
 st.markdown("""
 <div class="hero">
   <h1>FIFO-filter</h1>
-  <p>Filtrer fondstransaksjoner og eksporter i ODIN-importformat</p>
+  <p>Filtrer fondstransaksjoner og eksporter i GENUS-importformat</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -545,7 +545,7 @@ if opplastet:
         else:
             filnavn_ut = navn + "_FIFO.xlsx"
         st.download_button(
-            label="⬇  Last ned i ODIN-importformat",
+            label="⬇  Last ned i GENUS-importformat",
             data=df_til_excel_bytes(resultat),
             file_name=filnavn_ut,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
