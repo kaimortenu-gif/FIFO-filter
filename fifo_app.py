@@ -72,7 +72,7 @@ TYPE_KANDIDATER     = ["tran\ncode", "tran code", "trancode", "type", "transtype
 SECURITY_KANDIDATER      = ["security", "fund class name", "fond", "name", "fondsnavn"]
 ORIGINAL_COST_KANDIDATER = ["original cost", "original cost", "originalcost", "cost", "original_cost"]
 TRANSFER_KJOP_TYPER      = {"ti", "li"}  # Disse bruker Original Cost hvis tilgjengelig
-AVSLUTTENDE_SALG_TYPER   = {"to", "lo"}  # Fjernes kun hvis ekte avsluttende (ikke fondsbytte)
+AVSLUTTENDE_SALG_TYPER   = {"to", "lo", "sa"}  # Fjernes kun hvis ekte avsluttende (ikke fondsbytte)
 
 KJOP_VERDIER_AUTO = {"by", "kjøp", "kjop", "buy", "purchase", "ac", "ti", "li"}
 SALG_VERDIER_AUTO = {"sl", "salg", "sell", "sale", "to", "lo"}
