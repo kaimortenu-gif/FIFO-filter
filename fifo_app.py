@@ -76,7 +76,7 @@ AVSLUTTENDE_SALG_TYPER   = {"to", "lo"}  # Fjernes kun hvis ekte avsluttende (ik
 
 KJOP_VERDIER_AUTO = {"by", "kjøp", "kjop", "buy", "purchase", "ac", "ti", "li"}
 SALG_VERDIER_AUTO = {"sl", "salg", "sell", "sale", "to", "lo"}
-IGNORER_VERDIER   = {"dv", "dividend", "utbytte", "pa", "sa"}
+IGNORER_VERDIER   = {"dv", "dividend", "utbytte", "pa", "sa", "in"}
 
 OUTPUT_KOLONNER = [
     "Customer Name", "Social Security/Organization No", "ODIN Account No",
