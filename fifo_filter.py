@@ -35,8 +35,8 @@ TYPE_KANDIDATER     = ["tran\ncode", "tran code", "trancode", "type", "transtype
                        "transaction type", "transaksjonstype"]
 SECURITY_KANDIDATER = ["security", "fund class name", "fond", "name", "fondsnavn"]
 
-KJOP_VERDIER_AUTO = {"by", "kjøp", "kjop", "buy", "purchase", "ac", "ti"}
-SALG_VERDIER_AUTO = {"sl", "salg", "sell", "sale", "to"}
+KJOP_VERDIER_AUTO = {"by", "kjøp", "kjop", "buy", "purchase", "ac", "ti", "li"}
+SALG_VERDIER_AUTO = {"sl", "salg", "sell", "sale", "to", "lo"}
 IGNORER_VERDIER   = {"dv", "dividend", "utbytte"}
 
 OUTPUT_KOLONNER = [

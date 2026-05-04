@@ -71,8 +71,8 @@ TYPE_KANDIDATER     = ["tran\ncode", "tran code", "trancode", "type", "transtype
                        "transaction type", "transaksjonstype"]
 SECURITY_KANDIDATER = ["security", "fund class name", "fond", "name", "fondsnavn"]
 
-KJOP_VERDIER_AUTO = {"by", "kjøp", "kjop", "buy", "purchase", "ac", "ti"}
-SALG_VERDIER_AUTO = {"sl", "salg", "sell", "sale", "to"}
+KJOP_VERDIER_AUTO = {"by", "kjøp", "kjop", "buy", "purchase", "ac", "ti", "li"}
+SALG_VERDIER_AUTO = {"sl", "salg", "sell", "sale", "to", "lo"}
 IGNORER_VERDIER   = {"dv", "dividend", "utbytte"}
 
 OUTPUT_KOLONNER = [
@@ -88,7 +88,7 @@ FORMAT_BELOP   = '#,##0.00'
 
 TYPE_FORKLARING = {
     "by": "kjøp", "sl": "salg", "ac": "acquisition (kjøp)",
-    "to": "transfer out (salg)", "ti": "transfer in (kjøp)", "dv": "utbytte (ignoreres)",
+    "to": "transfer out (salg)", "ti": "transfer in (kjøp)", "li": "limit in (kjøp)", "lo": "limit out (salg)", "dv": "utbytte (ignoreres)",
 }
 
 
@@ -407,8 +407,23 @@ if opplastet:
         st.dataframe(resultat, use_container_width=True, height=350)
 
         with st.expander("Oppsummering per ISIN"):
-            opps = resultat.groupby("Fund Class ISIN").size().reset_index(name="Transaksjoner")
-            st.dataframe(opps, use_container_width=True)
+            opps = (
+                resultat.groupby(["Fund Class ISIN", "Fund Class Name"])
+                .agg(
+                    Transaksjoner=("Fund Class ISIN", "size"),
+                    Sum_andeler=("Shares", lambda x: sum(
+                        float(str(v).replace(",", ".")) for v in x
+                        if str(v).strip() not in ("", "nan", "None")
+                    ))
+                )
+                .reset_index()
+                .rename(columns={
+                    "Fund Class Name": "Verdipapir",
+                    "Sum_andeler": "Sum andeler"
+                })
+            )
+            opps["Sum andeler"] = opps["Sum andeler"].round(7)
+            st.dataframe(opps, use_container_width=True, hide_index=True)
 
         st.markdown('<div class="section-label">Last ned</div>', unsafe_allow_html=True)
         navn = opplastet.name
