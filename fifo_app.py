@@ -321,7 +321,7 @@ def kjor_fifo(df, kol, kjop_set, salg_set):
     ut["Shares"]              = df_filtr[kol["andeler"]]
     ut["Cost Value NAV Date"] = pd.to_datetime(df_filtr[kol["dato"]], errors="coerce").dt.strftime("%d.%m.%Y")
     ut["Cost Value NOK"]      = df_filtr[kol["belop"]]
-    ut["Settlemt currency"]      = "NOK"    
+    ut["Settlement Currency"]      = "NOK"    
     ut["Settlement NAV Date"] = today
     for k in OUTPUT_KOLONNER:
         if k in ut.columns and ut[k].isna().all():
